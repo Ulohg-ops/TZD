@@ -1,0 +1,5 @@
+# From https://github.com/redis/redis-hashes/blob/master/README
+sha256  e9296b67b54c91befbcca046d67071c780a1f7c9f9e1ae5ed94773c3bb9b542f  redis-8.0.2.tar.gz
+
+# Locally calculated
+sha256  4a0e416b9537688f30dfe69ddaceb2ca64d96b7df02a0a6760d376890ddc4e40  LICENSE.txt
