@@ -1590,13 +1590,15 @@ void rockchip_plat_mmu_el3(void)
 			sram_size, MT_NON_CACHEABLE | MT_RW | MT_SECURE);
 }
 
+
 void plat_rockchip_pmu_init(void)
 {
 	uint32_t cpu;
+	uint32_t vpu_id;
 
 	rockchip_pd_lock_init();
 
-	/* register requires 32bits mode, switch it to 32 bits */
+	/* 暫存器要求 32 位元模式，將其轉換為 32 位元 */
 	cpu_warm_boot_addr = (uint64_t)platform_cpu_warmboot;
 
 	for (cpu = 0; cpu < PLATFORM_CORE_COUNT; cpu++)
@@ -1605,22 +1607,47 @@ void plat_rockchip_pmu_init(void)
 	for (cpu = 0; cpu < PLATFORM_CLUSTER_COUNT; cpu++)
 		clst_warmboot_data[cpu] = 0;
 
-	/* config cpu's warm boot address */
+	/* --- 創新點實驗測試開始 --- */
+
+	/* 1. 開啟 VCODEC 電源域：確保硬體通電 */
+	pmu_set_power_domain(PD_VCODEC, pmu_pd_on);
+
+	/* 2. 強制解除 VCODEC 相關的時鐘門控 (CRU_CLKGATE_CON12)
+	 * 在 RK3399 中，暫存器寫入通常需要高 16 位元作為 Mask。
+	 * 寫入 0 代表開啟時鐘 (Disable Gate) */
+	mmio_write_32(CRU_BASE + 0x0330, 0xffff0000); 
+
+	/* 3. 在 EL3 讀取 VPU IOMMU 版本暫存器 (偏移 0x04) 
+	 * 讀取此位址若在 Linux 端會導致當機，但在這裡用於驗證 Secure World 權限 */
+	vpu_id = mmio_read_32(0xff650804); 
+
+	/* 4. 將讀取結果寫入留言板 CON0 (0xFF77E200) 供 Linux 稍後檢查
+	 * 高 16 位元為 0xffff 作為寫入掩碼 */
+	mmio_write_32(GRF_BASE + GRF_SOC_CON(0), 0xffff0000 | (vpu_id & 0xffff));
+
+	/* 5. 寫入 0xdead 到 CON1 (0xFF77E204) 代表 EL3 順利執行完畢且未因讀取而當機 */
+	mmio_write_32(GRF_BASE + GRF_SOC_CON(1), 0xffffdead);
+
+	/* --- 創新點實驗測試結束 --- */
+
+	/* 配置 CPU 的熱啟動地址 */
 	mmio_write_32(SGRF_BASE + SGRF_SOC_CON(1),
-		      (cpu_warm_boot_addr >> CPU_BOOT_ADDR_ALIGN) |
+		      ((uintptr_t)cpu_warm_boot_addr >> CPU_BOOT_ADDR_ALIGN) |
 		      CPU_BOOT_ADDR_WMASK);
+
+	/* 開啟 NOC 自動使能 */
 	mmio_write_32(PMU_BASE + PMU_NOC_AUTO_ENA, NOC_AUTO_ENABLE);
 
-	/*
-	 * Enable Schmitt trigger for better 32 kHz input signal, which is
-	 * important for suspend/resume reliability among other things.
-	 */
+	/* 開啟 32kHz 施密特觸發器，對於掛起/恢復的可靠性很重要 */
 	mmio_write_32(PMUGRF_BASE + PMUGRF_GPIO0A_SMT, GPIO0A0_SMT_ENABLE);
 
+	/* 初始化 PMU 相關計數器 */
 	init_pmu_counts();
 
+	/* 關閉所有非啟動核心 */
 	nonboot_cpus_off();
 
+	/* 輸出 PMU 狀態資訊 */
 	INFO("%s(%d): pd status %x\n", __func__, __LINE__,
 	     mmio_read_32(PMU_BASE + PMU_PWRDN_ST));
 }

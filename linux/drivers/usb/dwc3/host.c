@@ -12,6 +12,11 @@
 #include <linux/platform_device.h>
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
+#include <linux/of_device.h>
+
+#include <linux/of_device.h>
+#include <linux/dma-mapping.h>
+#include <linux/iommu.h>
 
 #include "../host/xhci-port.h"
 #include "../host/xhci-ext-caps.h"
@@ -21,6 +26,7 @@
 
 #define XHCI_HCSPARAMS1		0x4
 #define XHCI_PORTSC_BASE	0x400
+
 
 /**
  * dwc3_power_off_all_roothub_ports - Power off all Root hub ports
@@ -131,10 +137,6 @@ int dwc3_host_init(struct dwc3 *dwc)
 	int			ret, irq;
 	int			prop_idx = 0;
 
-	/*
-	 * Some platforms need to power off all Root hub ports immediately after DWC3 set to host
-	 * mode to avoid VBUS glitch happen when xhci get reset later.
-	 */
 	dwc3_power_off_all_roothub_ports(dwc);
 
 	irq = dwc3_host_get_irq(dwc);
@@ -142,85 +144,89 @@ int dwc3_host_init(struct dwc3 *dwc)
 		return irq;
 
 	xhci = platform_device_alloc("xhci-hcd", PLATFORM_DEVID_AUTO);
-	if (!xhci) {
-		dev_err(dwc->dev, "couldn't allocate xHCI device\n");
+	if (!xhci)
 		return -ENOMEM;
-	}
 
-	xhci->dev.parent	= dwc->dev;
+	/* parent / fwnode 先設好 */
+	xhci->dev.parent = dwc->dev;
+	xhci->dev.fwnode = dwc->dev->fwnode;
 
-	dwc->xhci = xhci;
-
-	ret = platform_device_add_resources(xhci, dwc->xhci_resources,
-						DWC3_XHCI_RESOURCES_NUM);
-	if (ret) {
-		dev_err(dwc->dev, "couldn't add resources to xHCI device\n");
-		goto err;
-	}
-
-	memset(props, 0, sizeof(struct property_entry) * ARRAY_SIZE(props));
-
-	props[prop_idx++] = PROPERTY_ENTRY_BOOL("xhci-sg-trb-cache-size-quirk");
-
-	props[prop_idx++] = PROPERTY_ENTRY_BOOL("write-64-hi-lo-quirk");
-
-	if (dwc->usb3_lpm_capable)
-		props[prop_idx++] = PROPERTY_ENTRY_BOOL("usb3-lpm-capable");
-
-	if (dwc->usb2_lpm_disable)
-		props[prop_idx++] = PROPERTY_ENTRY_BOOL("usb2-lpm-disable");
-
-	/**
-	 * WORKAROUND: dwc3 revisions <=3.00a have a limitation
-	 * where Port Disable command doesn't work.
-	 *
-	 * The suggested workaround is that we avoid Port Disable
-	 * completely.
-	 *
-	 * This following flag tells XHCI to do just that.
+	/*
+	 * 先把 DMA mask 設好！
+	 * 很多平台 arch_setup_dma_ops()/of_dma_configure() 會依賴 dma_mask
+	 * 你之前 get_dma_ops = NULL 八成就是因為這個順序錯。
 	 */
-	if (DWC3_VER_IS_WITHIN(DWC3, ANY, 300A))
-		props[prop_idx++] = PROPERTY_ENTRY_BOOL("quirk-broken-port-ped");
+	xhci->dev.dma_mask = dwc->dev->dma_mask;
+	xhci->dev.coherent_dma_mask = dwc->dev->coherent_dma_mask;
 
-	if (prop_idx) {
-		ret = device_create_managed_software_node(&xhci->dev, props, NULL);
+	/*
+	 * 關鍵：只呼叫一次 of_dma_configure()
+	 * 讓 xhci 裝置複製 parent node 的 dma/iommu 設定（包含 iommus 解析）
+	 */
+	if (dwc->dev->of_node) {
+		pr_info("dwc3: configuring DMA/IOMMU for xhci from parent DT node\n");
+		ret = of_dma_configure(&xhci->dev, dwc->dev->of_node, true);
 		if (ret) {
-			dev_err(dwc->dev, "failed to add properties to xHCI\n");
+			dev_err(dwc->dev, "of_dma_configure(xhci) failed: %d\n", ret);
 			goto err;
 		}
+	} else {
+		/*
+		 * 沒有 of_node 的情況就不要硬搞 IOMMU
+		 * 讓它走一般 platform 的 dma_ops 配置。
+		 */
+		dev_warn(dwc->dev, "no of_node; xhci will use default DMA ops\n");
 	}
 
-	ret = platform_device_add_data(xhci, &dwc3_xhci_plat_quirk,
-				       sizeof(struct xhci_plat_priv));
+	/* 這裡再存到 dwc */
+	dwc->xhci = xhci;
+
+	/* resources */
+	ret = platform_device_add_resources(xhci, dwc->xhci_resources,
+					    DWC3_XHCI_RESOURCES_NUM);
 	if (ret)
 		goto err;
 
+	/* quirks software node */
+	memset(props, 0, sizeof(props));
+	props[prop_idx++] = PROPERTY_ENTRY_BOOL("xhci-sg-trb-cache-size-quirk");
+	props[prop_idx++] = PROPERTY_ENTRY_BOOL("write-64-hi-lo-quirk");
+	if (dwc->usb3_lpm_capable)
+		props[prop_idx++] = PROPERTY_ENTRY_BOOL("usb3-lpm-capable");
+
+	if (prop_idx) {
+		ret = device_create_managed_software_node(&xhci->dev, props, NULL);
+		if (ret)
+			goto err;
+	}
+
+	platform_device_add_data(xhci, &dwc3_xhci_plat_quirk,
+				 sizeof(struct xhci_plat_priv));
+
+	/* register */
 	ret = platform_device_add(xhci);
-	if (ret) {
-		dev_err(dwc->dev, "failed to register xHCI device\n");
+	if (ret)
 		goto err;
-	}
-
-	if (dwc->sys_wakeup) {
-		/* Restore wakeup setting if switched from device */
-		device_wakeup_enable(dwc->sysdev);
-
-		/* Pass on wakeup setting to the new xhci platform device */
-		device_init_wakeup(&xhci->dev, true);
-	}
 
 	return 0;
+
 err:
 	platform_device_put(xhci);
+	dwc->xhci = NULL;
 	return ret;
 }
 
+
 void dwc3_host_exit(struct dwc3 *dwc)
 {
+	if (!dwc->xhci)
+		return;
+
 	if (dwc->sys_wakeup)
 		device_init_wakeup(&dwc->xhci->dev, false);
 
 	dwc3_enable_susphy(dwc, false);
+
 	platform_device_unregister(dwc->xhci);
 	dwc->xhci = NULL;
 }

@@ -15,6 +15,21 @@
 	aliases {
 		mmc2 = &sdio0;
 	};
+
+	mock_iommu: mock-iommu@ff000000 {
+		compatible = "my,mock-iommu";
+		reg = <0x0 0xff000000 0x0 0x1000>;
+		/* 必須為 1：iommus = <&phandle id> 只有 1 個 cell */
+		#iommu-cells = <1>;
+		status = "okay";
+	};
+
+	secure_dma_test: secure-dma-test {
+		compatible = "my,secure-dma-test";
+		iommus = <&mock_iommu 0x123>;
+		status = "okay";
+	};
+
 };
 
 &sdio0 {

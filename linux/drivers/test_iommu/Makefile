@@ -1,0 +1,1 @@
+obj-$(CONFIG_MOCK_IOMMU) += mock_iommu.o

@@ -1,0 +1,7 @@
+config MOCK_IOMMU
+	bool "Mock IOMMU Driver for OP-TEE Testing"
+	depends on OF && ARM64
+	select IOMMU_API
+	help
+	  This is a mock IOMMU driver used for simulating memory mapping
+	  and SMC calls in an OP-TEE environment.

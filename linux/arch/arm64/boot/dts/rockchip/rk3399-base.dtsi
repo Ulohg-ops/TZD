@@ -529,6 +529,7 @@
 
 	usbdrd3_0: usb@fe800000 {
 		compatible = "rockchip,rk3399-dwc3";
+		iommus = <&mock_iommu 0x80>;
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
@@ -540,11 +541,12 @@
 			      "aclk_usb3", "grf_clk";
 		resets = <&cru SRST_A_USB3_OTG0>;
 		reset-names = "usb3-otg";
-		status = "disabled";
+		status = "okay";
 
 		usbdrd_dwc3_0: usb@fe800000 {
 			compatible = "snps,dwc3";
 			reg = <0x0 0xfe800000 0x0 0x100000>;
+			iommus = <&mock_iommu 0x80>;
 			interrupts = <GIC_SPI 105 IRQ_TYPE_LEVEL_HIGH 0>;
 			clocks = <&cru SCLK_USB3OTG0_REF>, <&cru ACLK_USB3OTG0>,
 				 <&cru SCLK_USB3OTG0_SUSPEND>;
@@ -559,7 +561,7 @@
 			snps,dis-del-phy-power-chg-quirk;
 			snps,dis-tx-ipgap-linecheck-quirk;
 			power-domains = <&power RK3399_PD_USB3>;
-			status = "disabled";
+			status = "okay";
 		};
 	};
 
@@ -576,11 +578,13 @@
 			      "aclk_usb3", "grf_clk";
 		resets = <&cru SRST_A_USB3_OTG1>;
 		reset-names = "usb3-otg";
-		status = "disabled";
+		iommus = <&mock_iommu 0x81>;
+		status = "okay";
 
 		usbdrd_dwc3_1: usb@fe900000 {
 			compatible = "snps,dwc3";
 			reg = <0x0 0xfe900000 0x0 0x100000>;
+			iommus = <&mock_iommu 0x81>;
 			interrupts = <GIC_SPI 110 IRQ_TYPE_LEVEL_HIGH 0>;
 			clocks = <&cru SCLK_USB3OTG1_REF>, <&cru ACLK_USB3OTG1>,
 				 <&cru SCLK_USB3OTG1_SUSPEND>;
@@ -595,7 +599,7 @@
 			snps,dis-del-phy-power-chg-quirk;
 			snps,dis-tx-ipgap-linecheck-quirk;
 			power-domains = <&power RK3399_PD_USB3>;
-			status = "disabled";
+			status = "okay";
 		};
 	};
 
